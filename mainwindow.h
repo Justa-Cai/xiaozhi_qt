@@ -38,7 +38,6 @@ private slots:
     void onConnectClicked();
     void onStartListenClicked();
     void onStopListenClicked();
-    void onSendMessageClicked();
     
     void onWebSocketConnected();
     void onWebSocketDisconnected();
@@ -85,7 +84,5 @@ private:
     QLabel *statusLabel;
     QPushButton *startListenButton;
     QPushButton *stopListenButton;
-    QLineEdit *messageInput;
-    QPushButton *sendButton;
     QTextEdit *logTextEdit;
 }; 

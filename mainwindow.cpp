@@ -238,13 +238,6 @@ void MainWindow::setupWebSocket()
     mainLayout->addWidget(startListenButton);
     mainLayout->addWidget(stopListenButton);
     
-    // 消息发送
-    messageInput = new QLineEdit(this);
-    sendButton = new QPushButton("发送", this);
-    connect(sendButton, &QPushButton::clicked, this, &MainWindow::onSendMessageClicked);
-    mainLayout->addWidget(messageInput);
-    mainLayout->addWidget(sendButton);
-    
     // 日志显示
     logTextEdit = new QTextEdit(this);
     logTextEdit->setReadOnly(true);
@@ -303,18 +296,6 @@ void MainWindow::onStopListenClicked()
     appendLog("停止监听");
     
     micManager->stopRecording();
-}
-
-void MainWindow::onSendMessageClicked()
-{
-    QString message = messageInput->text();
-    if (message.isEmpty() || !wsClient->isConnected()) {
-        return;
-    }
-    
-    wsClient->sendText(message);
-    messageInput->clear();
-    appendLog("发送消息: " + message);
 }
 
 void MainWindow::onWebSocketConnected()
@@ -418,8 +399,6 @@ void MainWindow::updateConnectionStatus(bool connected)
     
     startListenButton->setEnabled(connected);
     stopListenButton->setEnabled(connected && isListening);
-    sendButton->setEnabled(connected);
-    messageInput->setEnabled(connected);
 }
 
 void MainWindow::appendLog(const QString& text)

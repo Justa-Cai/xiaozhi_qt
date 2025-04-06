@@ -65,6 +65,8 @@ private slots:
 private:
     void sendHello();
     void checkTimeout();
+    QString getMacAddress();
+    QString generateClientId(const QString &macAddress);
 
 private:
     QWebSocket webSocket;

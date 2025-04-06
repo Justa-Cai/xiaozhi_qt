@@ -3,6 +3,11 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QDebug>
+#include <QNetworkInterface>
+#include <QCryptographicHash>
+#include <QUdpSocket>
+#include <QHostAddress>
+#include <QNetworkAddressEntry>
 
 // 配置参数
 #define CONFIG_WEBSOCKET_ACCESS_TOKEN "test-token"  // 替换为实际的访问令牌
@@ -40,8 +45,14 @@ bool WebSocketClient::connectToServer(const QString& url)
     request.setRawHeader("Authorization", "Bearer " + QString(CONFIG_WEBSOCKET_ACCESS_TOKEN).toUtf8());
     
     // 获取设备信息作为ID
-    QString deviceId = "60:a4:4c:59:44:61";  // TODO: 从实际设备获取 MAC 地址
-    QString clientId = "23e62604-e78c-4efd-88df-6652c22b63e9";  // TODO: 生成唯一的客户端 ID
+    // 44:AF:28:64:ED:3F
+    // QString deviceId = "44:a4:4c:59:44:60";  // TODO: 从实际设备获取 MAC 地址
+    // QString deviceId = "44:af:28:64:ed:3f";
+    // QString clientId = "23e62604-e78c-4efd-88df-6652c22b63e9";  // TODO: 生成唯一的客户端 ID
+    QString deviceId = getMacAddress();
+    QString clientId = generateClientId(deviceId);
+    qDebug() << "Device MAC:" << deviceId;
+    qDebug() << "Client ID:" << clientId;
     request.setRawHeader("Device-Id", deviceId.toUtf8());
     request.setRawHeader("Client-Id", clientId.toUtf8());
     
@@ -191,4 +202,66 @@ void WebSocketClient::checkTimeout()
         qDebug() << "Server hello timeout";
         closeConnection();
     }
+}
+
+QString WebSocketClient::getMacAddress() {
+    QString macAddress;
+    
+    // 创建UDP socket
+    QUdpSocket socket;
+    // 尝试连接Google DNS服务器（不会真正发送数据）
+    socket.connectToHost("223.6.6.6", 53);
+    if (socket.waitForConnected(1000)) {  // 等待最多1秒
+        // 获取本地地址
+        QHostAddress localAddress = socket.localAddress();
+        socket.disconnectFromHost();
+        
+        // 获取所有网络接口
+        QList<QNetworkInterface> interfaces = QNetworkInterface::allInterfaces();
+        
+        // 查找匹配的网络接口
+        for (const QNetworkInterface &interface : interfaces) {
+            // 跳过回环接口和非活动接口
+            if (interface.flags().testFlag(QNetworkInterface::IsLoopBack) ||
+                !interface.flags().testFlag(QNetworkInterface::IsUp) ||
+                !interface.flags().testFlag(QNetworkInterface::IsRunning)) {
+                continue;
+            }
+            
+            // 检查接口的地址列表
+            QList<QNetworkAddressEntry> entries = interface.addressEntries();
+            for (const QNetworkAddressEntry &entry : entries) {
+                if (entry.ip() == localAddress) {
+                    macAddress = interface.hardwareAddress().toLower();
+                    qDebug() << "找到出口网卡:" << interface.name() 
+                            << "IP:" << localAddress.toString()
+                            << "MAC:" << macAddress;
+                    return macAddress;
+                }
+            }
+        }
+    }
+    
+    // 如果没有找到出口网卡，使用默认值
+    if (macAddress.isEmpty()) {
+        macAddress = "60:a4:4c:59:44:60";  // 使用默认的MAC地址
+        qDebug() << "未找到出口网卡的MAC地址，使用默认地址:" << macAddress;
+    }
+    
+    return macAddress;
+}
+
+QString WebSocketClient::generateClientId(const QString &macAddress) {
+    // 使用MAC地址作为种子生成UUID
+    QByteArray data = macAddress.toUtf8();
+    QByteArray hash = QCryptographicHash::hash(data, QCryptographicHash::Md5);
+    
+    // 构造UUID格式 (8-4-4-4-12)
+    QString uuid = hash.toHex();
+    uuid.insert(8, '-');
+    uuid.insert(13, '-');
+    uuid.insert(18, '-');
+    uuid.insert(23, '-');
+    
+    return uuid.left(36);
 } 

@@ -19,6 +19,9 @@
 #include <QHBoxLayout>
 #include <QComboBox>
 #include <QLabel>
+#include <QUdpSocket>
+#include <QNetworkInterface>
+#include <QNetworkAddressEntry>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -32,8 +35,13 @@ MainWindow::MainWindow(QWidget *parent)
     , isListening(false)
     , isRecording(false)
     , sessionId("")  // 显式初始化为空
+    , deviceMacAddress("")
 {
     ui->setupUi(this);
+    
+    // 初始化设备MAC地址
+    deviceMacAddress = getMacAddress();
+    qDebug() << "设备MAC地址:" << deviceMacAddress;
     
     // 将窗口移动到屏幕中央
     QRect screenGeometry = QApplication::primaryScreen()->geometry();
@@ -42,6 +50,7 @@ MainWindow::MainWindow(QWidget *parent)
     move(x, y);
 
     setupAudioModules();
+    checkFirmwareVersion();
     setupWebSocket();
     
     // 连接录音按钮信号
@@ -352,7 +361,7 @@ void MainWindow::onJsonReceived(const QString& json)
                 }
                 
                 // 在成功连接并收到hello消息后检查固件版本
-                checkFirmwareVersion();
+                // checkFirmwareVersion();
             }
         }
         else if (type == "stt") {
@@ -392,13 +401,14 @@ void MainWindow::onJsonReceived(const QString& json)
 
 void MainWindow::updateConnectionStatus(bool connected)
 {
-    connectButton->setText(connected ? "断开连接" : "连接服务器");
-    connectButton->setEnabled(true);
+    connectButton->setEnabled(!connected);
+    startListenButton->setEnabled(connected);
+    stopListenButton->setEnabled(connected);
     
     statusLabel->setText(connected ? "已连接" : "未连接");
-    
-    startListenButton->setEnabled(connected);
-    stopListenButton->setEnabled(connected && isListening);
+    if (!connected) {
+        isListening = false;
+    }
 }
 
 void MainWindow::appendLog(const QString& text)
@@ -413,9 +423,6 @@ void MainWindow::keyPressEvent(QKeyEvent* event)
         if (wsClient->isConnected() && !isListening) {
             onStartListenClicked();
         }
-    }
-    else if (event->key() == Qt::Key_Escape) {
-        close();  // 按ESC键关闭窗口
     }
     QMainWindow::keyPressEvent(event);
 }
@@ -624,4 +631,51 @@ void MainWindow::sendIoTDescriptors(const QJsonObject& descriptors)
     QJsonDocument doc(iot);
     wsClient->sendText(doc.toJson());
     appendLog("发送IoT设备描述");
+}
+
+QString MainWindow::getMacAddress() {
+    QString macAddress;
+    
+    // 创建UDP socket
+    QUdpSocket socket;
+    // 尝试连接阿里DNS服务器（不会真正发送数据）
+    socket.connectToHost("223.6.6.6", 53);
+    if (socket.waitForConnected(1000)) {  // 等待最多1秒
+        // 获取本地地址
+        QHostAddress localAddress = socket.localAddress();
+        socket.disconnectFromHost();
+        
+        // 获取所有网络接口
+        QList<QNetworkInterface> interfaces = QNetworkInterface::allInterfaces();
+        
+        // 查找匹配的网络接口
+        for (const QNetworkInterface &interface : interfaces) {
+            // 跳过回环接口和非活动接口
+            if (interface.flags().testFlag(QNetworkInterface::IsLoopBack) ||
+                !interface.flags().testFlag(QNetworkInterface::IsUp) ||
+                !interface.flags().testFlag(QNetworkInterface::IsRunning)) {
+                continue;
+            }
+            
+            // 检查接口的地址列表
+            QList<QNetworkAddressEntry> entries = interface.addressEntries();
+            for (const QNetworkAddressEntry &entry : entries) {
+                if (entry.ip() == localAddress) {
+                    macAddress = interface.hardwareAddress();
+                    qDebug() << "找到出口网卡:" << interface.name() 
+                            << "IP:" << localAddress.toString()
+                            << "MAC:" << macAddress;
+                    return macAddress;
+                }
+            }
+        }
+    }
+    
+    // 如果没有找到出口网卡，使用默认值
+    if (macAddress.isEmpty()) {
+        macAddress = "60:A4:4C:59:44:60";  // 使用默认的MAC地址
+        qDebug() << "未找到出口网卡的MAC地址，使用默认地址:" << macAddress;
+    }
+    
+    return macAddress;
 } 

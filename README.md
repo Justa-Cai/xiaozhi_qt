@@ -113,7 +113,21 @@ sudo make install
 - `test_speaker_manager`: 扬声器管理测试程序
 - `test_sine_wave`: 正弦波测试程序
 
-## 许可证
+## 运行
+```bash
+./build/xiaozhi_qt
+```
+
+## 配置
+![获取激活码](pic/2025-04-06_17-11.png)
+
+登录 [https://xiaozhi.me/console](https://xiaozhi.me/console) 设置激活码
+![登录添加设备](pic/2025-04-06_17-12.png)
+
+![登录设置激活码](pic/2025-04-06_17-12_1.png)
+
+
+# 许可证
 
 本项目采用 MIT 许可证。
 
@@ -122,7 +136,6 @@ MIT 许可证是一个宽松的许可证，允许：
 - ✅ 修改
 - ✅ 分发
 - ✅ 私人使用
-
 唯一的要求是在软件的所有副本中都必须包含原始的 MIT 许可证和版权声明。
 
 ```text

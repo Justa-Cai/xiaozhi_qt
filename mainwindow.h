@@ -76,7 +76,8 @@ private:
     bool isListening;
     bool isRecording;
     QString sessionId;
-    QString deviceMacAddress = "60:a4:4c:59:44:61";
+    QString deviceMacAddress;
+    QString getMacAddress();
 
     // UI组件
     QVBoxLayout *mainLayout;

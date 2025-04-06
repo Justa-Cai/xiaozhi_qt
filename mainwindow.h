@@ -11,6 +11,7 @@
 #include "speaker_manager.h"
 #include "opus_encoder.h"
 #include "opus_decoder.h"
+#include "wake_word_detector.h"
 #include <QNetworkAccessManager>
 #include <QDir>
 #include <QFile>
@@ -52,6 +53,7 @@ private slots:
     void startRecording();
     void stopRecording();
     void handleSilenceDetected();
+    void onWakeWordDetected(const QString& text);
 
 private:
     void setupAudioModules();
@@ -77,6 +79,7 @@ private:
     SpeakerManager *speakerManager;
     OpusEncoder *opusEncoder;
     OpusDecoder *opusDecoder;
+    WakeWordDetector *wakeWordDetector;
     
     bool isListening;
     bool isRecording;

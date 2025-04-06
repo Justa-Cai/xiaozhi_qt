@@ -119,11 +119,11 @@ void VadProcessor::handleNewData()
             bool hasVoice = vad->process(samples, FRAME_SIZE);
             
             if (hasVoice) {
-                qDebug() << "检测到语音帧，重置静音计数器";
+                // qDebug() << "检测到语音帧，重置静音计数器";
                 silenceFrameCount = 0;
                 emit voiceDetected();
             } else {
-                qDebug() << "检测到静音帧，当前静音帧计数:" << silenceFrameCount;
+                // qDebug() << "检测到静音帧，当前静音帧计数:" << silenceFrameCount;
                 silenceFrameCount++;
                 if (silenceFrameCount >= silenceFramesThreshold) {
                     qDebug() << "WebRTC VAD检测到持续静音";

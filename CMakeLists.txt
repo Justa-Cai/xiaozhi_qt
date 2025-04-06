@@ -55,6 +55,11 @@ pkg_check_modules(OPUS REQUIRED opus)
 # 查找 Ogg 库
 pkg_check_modules(OGG REQUIRED ogg)
 
+# 设置 Vosk 本地路径
+set(VOSK_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third/vosk/include)
+set(VOSK_LIBRARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third/vosk/lib)
+set(VOSK_LIBRARY ${VOSK_LIBRARY_DIR}/libvosk.so)
+
 set(PROJECT_SOURCES
     main.cpp
     mainwindow.cpp
@@ -74,6 +79,8 @@ set(PROJECT_SOURCES
     webrtcvad.h
     vad_processor.cpp
     vad_processor.h
+    wake_word_detector.cpp
+    wake_word_detector.h
 )
 
 # 主程序
@@ -119,6 +126,7 @@ target_link_libraries(xiaozhi_qt PRIVATE
     ${OPUS_LIBRARIES}
     ${OGG_LIBRARIES}
     fvad
+    ${VOSK_LIBRARY}
 )
 
 # 链接 Qt 库 - 测试程序
@@ -148,6 +156,7 @@ target_include_directories(xiaozhi_qt PRIVATE
     ${OPUS_INCLUDE_DIRS}
     ${OGG_INCLUDE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/third/libfvad/include
+    ${VOSK_INCLUDE_DIR}
 )
 
 # 设置包含目录 - 测试程序
@@ -174,6 +183,7 @@ target_include_directories(xiaozhi_qt PRIVATE
 target_link_directories(xiaozhi_qt PRIVATE
     ${OPUS_LIBRARY_DIRS}
     ${OGG_LIBRARY_DIRS}
+    ${VOSK_LIBRARY_DIR}
 )
 
 # 设置链接目录 - 测试程序
@@ -190,6 +200,19 @@ target_link_directories(xiaozhi_qt PRIVATE
 # 安装目标
 install(TARGETS xiaozhi_qt
     RUNTIME DESTINATION bin
+)
+
+# 在目标中添加 Vosk
+target_link_libraries(xiaozhi_qt PRIVATE ${VOSK_LIBRARY})
+
+# 设置本地库路径
+set(LOCAL_INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/local)
+list(APPEND CMAKE_PREFIX_PATH ${LOCAL_INSTALL_DIR})
+
+# 设置运行时链接路径
+set_target_properties(xiaozhi_qt PROPERTIES
+    BUILD_WITH_INSTALL_RPATH TRUE
+    INSTALL_RPATH "${CMAKE_CURRENT_SOURCE_DIR}/third/vosk/lib"
 )
 
 if(QT_VERSION_MAJOR EQUAL 6)

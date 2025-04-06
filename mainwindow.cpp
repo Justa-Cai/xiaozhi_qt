@@ -27,6 +27,7 @@
 #include <QMutexLocker>
 #include <QMetaObject>
 #include "vad_processor.h"
+#include "wake_word_detector.h"
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -37,6 +38,7 @@ MainWindow::MainWindow(QWidget *parent)
     , speakerManager(nullptr)
     , opusEncoder(nullptr)
     , opusDecoder(nullptr)
+    , wakeWordDetector(nullptr)
     , isListening(false)
     , isRecording(false)
     , sessionId("")
@@ -96,17 +98,59 @@ MainWindow::~MainWindow()
     delete speakerManager;
     delete opusEncoder;
     delete opusDecoder;
+    delete wakeWordDetector;
     delete vadProcessor;
 }
 
 void MainWindow::setupAudioModules()
 {
+    qDebug() << "开始初始化音频模块...";
+    
     // 创建音频模块实例
     micManager = new MicrophoneManager(this);
     speakerManager = new SpeakerManager(this);
     opusEncoder = new OpusEncoder(this);
     opusDecoder = new OpusDecoder(this);
     
+    qDebug() << "开始初始化唤醒词检测器...";
+    // 初始化唤醒词检测器
+    wakeWordDetector = new WakeWordDetector(this);
+    
+    // 获取应用程序目录
+    QString appDir = QCoreApplication::applicationDirPath();
+    // 获取项目根目录（假设build目录在项目根目录下）
+    QDir rootDir(appDir);
+    rootDir.cdUp();
+    QString modelPath = rootDir.absolutePath() + "/models/vosk-model-cn";
+    qDebug() << "唤醒词模型路径:" << modelPath;
+    
+    // 检查模型目录是否存在
+    QDir modelDir(modelPath);
+    if (!modelDir.exists()) {
+        qDebug() << "唤醒词模型目录不存在";
+        appendLog(QString("唤醒词模型目录不存在: %1").arg(modelPath));
+        appendLog("请确保已下载并解压模型文件到正确位置");
+        delete wakeWordDetector;
+        wakeWordDetector = nullptr;
+    } else {
+        qDebug() << "找到唤醒词模型目录，开始初始化...";
+        appendLog(QString("正在初始化唤醒词检测器，使用模型: %1").arg(modelPath));
+        if (!wakeWordDetector->initialize(modelPath)) {
+            qDebug() << "唤醒词检测器初始化失败";
+            appendLog("唤醒词检测器初始化失败");
+            delete wakeWordDetector;
+            wakeWordDetector = nullptr;
+        } else {
+            qDebug() << "唤醒词检测器初始化成功，准备启动...";
+            appendLog("唤醒词检测器初始化成功");
+            connect(wakeWordDetector, &WakeWordDetector::wakeWordDetected,
+                    this, &MainWindow::onWakeWordDetected);
+            wakeWordDetector->start();
+            qDebug() << "唤醒词检测器启动完成";
+        }
+    }
+    
+    qDebug() << "配置音频参数...";
     // 配置音频参数
     int sampleRate = 16000;
     int channels = 1;
@@ -121,14 +165,18 @@ void MainWindow::setupAudioModules()
     connect(micManager, &MicrophoneManager::pcmDataReady,
             this, &MainWindow::onPCMDataReady);
     
+    qDebug() << "初始化 VAD 处理器...";
     // 初始化 VAD 处理器
     vadProcessor = new VadProcessor(nullptr);
     vadProcessor->setVadFrames(VAD_SILENCE_FRAMES);
     
     // 连接信号
-    connect(vadProcessor, &VadProcessor::silenceDetected, this, &MainWindow::handleSilenceDetected, Qt::QueuedConnection);
+    connect(vadProcessor, &VadProcessor::silenceDetected,
+            this, &MainWindow::handleSilenceDetected,
+            Qt::QueuedConnection);
     
     vadProcessor->start();
+    qDebug() << "音频模块初始化完成";
 }
 
 void MainWindow::handleSilenceDetected()
@@ -156,15 +204,20 @@ void MainWindow::handleSilenceDetected()
 
 void MainWindow::onPCMDataReady(const QByteArray& pcmData)
 {
-    // qDebug() << "MainWindow: 收到PCM数据，大小:" << pcmData.size() << "字节，录音状态:" << (isRecording ? "录音中" : "未录音");
-    
     if (!isRecording) {
         qDebug() << "当前未在录音状态，忽略PCM数据";
         return;
     }
     
+    // 发送数据到唤醒词检测器
+    if (wakeWordDetector)
+        wakeWordDetector->processAudioData(pcmData);
+
+        return;
+    
+    
     // 发送数据到 VAD 处理器进行处理
-    vadProcessor->processAudioData(pcmData);
+    // vadProcessor->processAudioData(pcmData);
     
     // 再次检查录音状态，避免在停止过程中继续处理数据
     if (!isRecording) {
@@ -189,13 +242,6 @@ void MainWindow::onPCMDataReady(const QByteArray& pcmData)
     }
     
     if (wsClient && wsClient->isConnected()) {
-        // 保存opus数据到文件
-        QFile file("send.opus");
-        if (file.open(QIODevice::Append)) {
-            file.write(opusData);
-            file.close();
-        }
-
         std::vector<uint8_t> data(opusData.begin(), opusData.end());
         wsClient->sendAudio(data);
     }
@@ -722,6 +768,21 @@ void MainWindow::sendIoTDescriptors(const QJsonObject& descriptors)
     QJsonDocument doc(iot);
     wsClient->sendText(doc.toJson());
     appendLog("发送IoT设备描述");
+}
+
+void MainWindow::onWakeWordDetected(const QString& text)
+{
+    appendLog("检测到唤醒词: " + text);
+    
+    // 如果当前未在录音状态，则开始录音
+    if (!isRecording) {
+        onStartListenClicked();
+    }
+    
+    // 发送唤醒词检测消息到服务器
+    if (wsClient && wsClient->isConnected()) {
+        sendWakeWordDetected(text);
+    }
 }
 
 QString MainWindow::getMacAddress() {

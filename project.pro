@@ -1,0 +1,1 @@
+LIBS += -lwebrtc_vad 

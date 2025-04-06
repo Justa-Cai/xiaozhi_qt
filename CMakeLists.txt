@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.5)
 
-project(xiaozhi_qt VERSION 0.1 LANGUAGES CXX)
+project(xiaozhi_qt VERSION 0.1 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -17,6 +17,33 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     add_compile_definitions(QT_DEBUG)
 endif()
 
+# 配置 libfvad 静态库
+set(LIBFVAD_SOURCES
+    third/libfvad/src/fvad.c
+    third/libfvad/src/signal_processing/division_operations.c
+    third/libfvad/src/signal_processing/energy.c
+    third/libfvad/src/signal_processing/get_scaling_square.c
+    third/libfvad/src/signal_processing/resample_48khz.c
+    third/libfvad/src/signal_processing/resample_by_2_internal.c
+    third/libfvad/src/signal_processing/resample_fractional.c
+    third/libfvad/src/signal_processing/spl_inl.c
+    third/libfvad/src/vad/vad_core.c
+    third/libfvad/src/vad/vad_filterbank.c
+    third/libfvad/src/vad/vad_gmm.c
+    third/libfvad/src/vad/vad_sp.c
+)
+
+add_library(fvad STATIC ${LIBFVAD_SOURCES})
+target_include_directories(fvad
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/third/libfvad/include
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/third/libfvad/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/third/libfvad/src/signal_processing
+        ${CMAKE_CURRENT_SOURCE_DIR}/third/libfvad/src/vad
+)
+target_compile_definitions(fvad PRIVATE WEBRTC_POSIX)
+
 # 查找所需的 Qt 组件
 find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets Multimedia WebSockets Network)
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets Multimedia WebSockets Network)
@@ -27,9 +54,6 @@ pkg_check_modules(OPUS REQUIRED opus)
 
 # 查找 Ogg 库
 pkg_check_modules(OGG REQUIRED ogg)
-
-# 查找 WebRTC VAD 库
-pkg_check_modules(FVAD REQUIRED libfvad)
 
 set(PROJECT_SOURCES
     main.cpp
@@ -94,7 +118,7 @@ target_link_libraries(xiaozhi_qt PRIVATE
     Qt${QT_VERSION_MAJOR}::Network
     ${OPUS_LIBRARIES}
     ${OGG_LIBRARIES}
-    ${FVAD_LIBRARIES}
+    fvad
 )
 
 # 链接 Qt 库 - 测试程序
@@ -123,7 +147,7 @@ target_include_directories(xiaozhi_qt PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}
     ${OPUS_INCLUDE_DIRS}
     ${OGG_INCLUDE_DIRS}
-    ${FVAD_INCLUDE_DIRS}
+    ${CMAKE_CURRENT_SOURCE_DIR}/third/libfvad/include
 )
 
 # 设置包含目录 - 测试程序
@@ -150,7 +174,6 @@ target_include_directories(xiaozhi_qt PRIVATE
 target_link_directories(xiaozhi_qt PRIVATE
     ${OPUS_LIBRARY_DIRS}
     ${OGG_LIBRARY_DIRS}
-    ${FVAD_LIBRARY_DIRS}
 )
 
 # 设置链接目录 - 测试程序

@@ -2,11 +2,14 @@
 #include <QDebug>
 #include <QTimer>
 #include <QFile>
+#include <QMutex>
+#include <QMutexLocker>
+#include <QPointer>
 
 MicrophoneManager::MicrophoneManager(QObject *parent)
     : QObject(parent)
     , audioSource(nullptr)
-    , audioIO(nullptr)
+    , audioDevice(nullptr)
     , sampleRate(16000)
     , channels(1)
     , frameSize(320*3)  // 20ms @ 16kHz
@@ -89,56 +92,45 @@ void MicrophoneManager::configureAudioParams(int newSampleRate, int newChannels)
 
 bool MicrophoneManager::startRecording()
 {
-    qDebug() << "MicrophoneManager::startRecording: 开始录音";
-    
-    if (recording || !audioSource) {
-        qDebug() << "录音失败: recording=" << recording 
-                 << ", audioSource=" << (audioSource != nullptr);
+    QAudioFormat format;
+    format.setSampleRate(16000);
+    format.setChannelCount(1);
+    format.setSampleFormat(QAudioFormat::Int16);
+
+    // 检查格式是否支持
+    QAudioDevice inputDevice = QMediaDevices::defaultAudioInput();
+    if (!inputDevice.isFormatSupported(format)) {
+        qDebug() << "默认音频输入设备不支持请求的格式";
         return false;
     }
-    
-    if (!checkDeviceHealth()) {
-        qDebug() << "录音失败: 设备状态检查未通过";
-        return false;
+
+    // 检查设备是否可用
+    if (!inputDevice.isNull()) {
+        audioSource = new QAudioSource(format, this);
+        if (audioSource) {
+            // 设置缓冲区大小（可选）
+            audioSource->setBufferSize(4096);
+
+            // 打开设备进行录音
+            audioDevice = audioSource->start();
+            if (audioDevice) {
+                connect(audioDevice, &QIODevice::readyRead, this, &MicrophoneManager::handleReadyRead);
+                recording = true;
+                qDebug() << "录音开始成功";
+                return true;
+            } else {
+                qDebug() << "打开音频设备失败";
+                delete audioSource;
+                audioSource = nullptr;
+            }
+        } else {
+            qDebug() << "创建音频源失败";
+        }
+    } else {
+        qDebug() << "找不到默认音频输入设备";
     }
-    
-    // 设置音频输入参数
-    int periodSize = frameSize * 2;  // 一个周期的采样数
-    int bufferSize = periodSize * 16; // 缓冲区大小为4个周期
-    audioSource->setBufferSize(bufferSize * format.bytesPerFrame());
-    audioSource->setVolume(1.0);
-    
-    qDebug() << "音频参数已设置:"
-             << "\n  帧大小:" << frameSize
-             << "\n  周期大小:" << periodSize
-             << "\n  缓冲区大小:" << bufferSize
-             << "\n  字节/帧:" << format.bytesPerFrame()
-             << "\n  采样率:" << format.sampleRate()
-             << "\n  通道数:" << format.channelCount()
-             << "\n  采样格式:" << format.sampleFormat();
-    
-    // 连接信号
-    connect(audioSource, &QAudioSource::stateChanged,
-            this, &MicrophoneManager::handleStateChanged,
-            Qt::UniqueConnection);
-    
-    // 启动录音
-    audioIO = audioSource->start();
-    if (!audioIO) {
-        qDebug() << "录音失败: 无法获取音频IO设备";
-        return false;
-    }
-    
-    qDebug() << "音频IO设备已打开，状态:" << audioIO->isOpen()
-             << ", 可读:" << audioIO->isReadable();
-    
-    connect(audioIO, &QIODevice::readyRead,
-            this, &MicrophoneManager::handleReadyRead,
-            Qt::UniqueConnection);
-    
-    recording = true;
-    qDebug() << "录音已成功启动";
-    return true;
+
+    return false;
 }
 
 void MicrophoneManager::stopRecording()
@@ -147,30 +139,65 @@ void MicrophoneManager::stopRecording()
         return;
     }
     
-    if (audioSource) {
-        audioSource->stop();
-        disconnect(audioSource, &QAudioSource::stateChanged,
+    // 防止重入
+    QMutexLocker locker(&audioMutex);
+    
+    if (!recording) {  // 双重检查
+        return;
+    }
+    
+    recording = false;  // 先设置标志，防止新的音频数据进入
+    
+    // 保存需要清理的指针
+    QPointer<QAudioSource> sourceToStop = audioSource;
+    QPointer<QIODevice> ioToClose = audioDevice;
+    
+    // 清空类成员指针
+    audioSource = nullptr;
+    audioDevice = nullptr;
+    
+    // 使用 QPointer 安全地访问对象
+    if (!sourceToStop.isNull()) {
+        // 先断开状态变化信号，避免触发 handleStateChanged
+        disconnect(sourceToStop, &QAudioSource::stateChanged,
                   this, &MicrophoneManager::handleStateChanged);
+        
+        // 停止音频源并阻止其他信号
+        sourceToStop->blockSignals(true);
+        sourceToStop->stop();
+        
+        // 延迟删除音频源
+        sourceToStop->deleteLater();
     }
     
-    if (audioIO) {
-        disconnect(audioIO, &QIODevice::readyRead,
+    if (!ioToClose.isNull()) {
+        // 断开信号并关闭设备
+        disconnect(ioToClose, &QIODevice::readyRead,
                   this, &MicrophoneManager::handleReadyRead);
-        audioIO = nullptr;
+        
+        ioToClose->blockSignals(true);
+        if (ioToClose->isOpen()) {
+            ioToClose->close();
+        }
     }
     
-    recording = false;
-    qDebug() << "录音已停止";
+    qDebug() << "录音已停止，资源已清理";
 }
 
 void MicrophoneManager::handleStateChanged(QAudio::State state)
 {
+    // 使用 QPointer 安全地访问 audioSource
+    QPointer<QAudioSource> source = audioSource;
+    if (source.isNull()) {
+        return;
+    }
+    
     qDebug() << "音频设备状态变化:" << state;
     
     if (state == QAudio::StoppedState) {
-        if (audioSource->error() != QAudio::NoError) {
-            qDebug() << "音频设备错误:" << audioSource->error();
-            stopRecording();
+        if (source->error() != QAudio::NoError) {
+            qDebug() << "音频设备错误:" << source->error();
+            QMetaObject::invokeMethod(this, "stopRecording", Qt::QueuedConnection);
         }
     } else if (state == QAudio::ActiveState) {
         qDebug() << "音频设备已进入活动状态";
@@ -179,21 +206,36 @@ void MicrophoneManager::handleStateChanged(QAudio::State state)
 
 void MicrophoneManager::handleReadyRead()
 {
-    if (!recording || !audioIO) {
+    QMutexLocker locker(&audioMutex);
+    
+    // 先检查录音状态
+    if (!recording) {
         return;
     }
-
+    
+    // 再检查设备状态
+    if (!audioDevice || !audioDevice->isOpen() || !audioDevice->isReadable()) {
+        return;
+    }
+    
     // 计算当前可用的数据大小
-    qint64 bytesAvailable = audioIO->bytesAvailable();
+    qint64 bytesAvailable = audioDevice->bytesAvailable();
     int frameBytes = frameSize * format.bytesPerFrame();
     
     // 如果数据不足一帧，等待下次读取
     if (bytesAvailable < frameBytes) {
         return;
     }
-
+    
     // 读取一帧数据
-    QByteArray frameData = audioIO->read(frameBytes);
+    QByteArray frameData;
+    try {
+        frameData = audioDevice->read(frameBytes);
+    } catch (...) {
+        qDebug() << "警告：读取音频数据时发生异常";
+        return;
+    }
+    
     if (!frameData.isEmpty()) {
         // 将PCM数据保存到文件用于调试
         static QFile debugFile("send.pcm");
@@ -211,7 +253,10 @@ void MicrophoneManager::handleReadyRead()
         if (fileOpened) {
             debugFile.write(frameData);
         }
-        // qDebug() << "handleReadyRead: 发送PCM数据，大小" << frameData.size() << "字节";
+        
+        // 在互斥锁保护之外发送信号
+        locker.unlock();
+        // qDebug() << "MicrophoneManager: 准备发送PCM数据，大小:" << frameData.size() << "字节";
         emit pcmDataReady(frameData);
     }
 }

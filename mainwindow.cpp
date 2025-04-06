@@ -22,6 +22,11 @@
 #include <QUdpSocket>
 #include <QNetworkInterface>
 #include <QNetworkAddressEntry>
+#include "webrtcvad.h"
+#include <QMutex>
+#include <QMutexLocker>
+#include <QMetaObject>
+#include "vad_processor.h"
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -34,24 +39,35 @@ MainWindow::MainWindow(QWidget *parent)
     , opusDecoder(nullptr)
     , isListening(false)
     , isRecording(false)
-    , sessionId("")  // 显式初始化为空
+    , sessionId("")
     , deviceMacAddress("")
+    , SILENCE_THRESHOLD(500)
+    , SILENCE_DURATION_MS(300)
+    , lastActiveTime(0)
+    , VAD_SILENCE_FRAMES(100)
+    , vadProcessor(nullptr)
 {
+    // 首先设置UI
     ui->setupUi(this);
     
-    // 初始化设备MAC地址
-    deviceMacAddress = getMacAddress();
-    qDebug() << "设备MAC地址:" << deviceMacAddress;
+    // 设置WebSocket
+    setupWebSocket();
     
     // 将窗口移动到屏幕中央
     QRect screenGeometry = QApplication::primaryScreen()->geometry();
     int x = (screenGeometry.width() - width()) / 2;
     int y = (screenGeometry.height() - height()) / 2;
     move(x, y);
-
-    setupAudioModules();
+    
+    // 初始化设备MAC地址
+    deviceMacAddress = getMacAddress();
+    qDebug() << "设备MAC地址:" << deviceMacAddress;
+    
+    // 检查固件版本
     checkFirmwareVersion();
-    setupWebSocket();
+    
+    // 设置音频模块
+    setupAudioModules();
     
     // 连接录音按钮信号
     connect(ui->recordButton, &QPushButton::clicked, this, [this]() {
@@ -61,6 +77,9 @@ MainWindow::MainWindow(QWidget *parent)
             stopRecording();
         }
     });
+    
+    // 确保窗口可见
+    show();
     
     // 自动连接服务器
     QTimer::singleShot(500, this, [this]() {
@@ -77,6 +96,7 @@ MainWindow::~MainWindow()
     delete speakerManager;
     delete opusEncoder;
     delete opusDecoder;
+    delete vadProcessor;
 }
 
 void MainWindow::setupAudioModules()
@@ -88,27 +108,70 @@ void MainWindow::setupAudioModules()
     opusDecoder = new OpusDecoder(this);
     
     // 配置音频参数
-    int sampleRate = 16000;  // 使用服务器要求的采样率
+    int sampleRate = 16000;
     int channels = 1;
-    int frameDuration = 60;  // ms
+    int frameDuration = 60;
     
     micManager->configureAudioParams(sampleRate, channels);
     speakerManager->configureAudioParams(sampleRate, channels);
     opusEncoder->initialize(sampleRate, channels, frameDuration);
     opusDecoder->initialize(sampleRate, channels, frameDuration);
     
-    // 连接麦克风PCM数据信号到编码器
+    // 连接麦克风PCM数据信号
     connect(micManager, &MicrophoneManager::pcmDataReady,
             this, &MainWindow::onPCMDataReady);
+    
+    // 初始化 VAD 处理器
+    vadProcessor = new VadProcessor(nullptr);
+    vadProcessor->setVadFrames(VAD_SILENCE_FRAMES);
+    
+    // 连接信号
+    connect(vadProcessor, &VadProcessor::silenceDetected, this, &MainWindow::handleSilenceDetected, Qt::QueuedConnection);
+    
+    vadProcessor->start();
+}
+
+void MainWindow::handleSilenceDetected()
+{
+    qDebug() << "检测到持续静音，准备停止录音";
+    
+    // 设置标志，防止新的音频数据进入
+    isRecording = false;
+    isListening = false;
+    
+    // 停止录音
+    if (micManager) {
+        micManager->stopRecording();
+    }
+    
+    // 发送停止监听状态
+    if (wsClient && wsClient->isConnected()) {
+        sendListenState("stop", "manual");
+    }
+    
+    // 更新UI状态
+    updateConnectionStatus(wsClient && wsClient->isConnected());
+    appendLog("检测到持续静音，停止录音");
 }
 
 void MainWindow::onPCMDataReady(const QByteArray& pcmData)
 {
+    // qDebug() << "MainWindow: 收到PCM数据，大小:" << pcmData.size() << "字节，录音状态:" << (isRecording ? "录音中" : "未录音");
+    
     if (!isRecording) {
         qDebug() << "当前未在录音状态，忽略PCM数据";
         return;
     }
     
+    // 发送数据到 VAD 处理器进行处理
+    vadProcessor->processAudioData(pcmData);
+    
+    // 再次检查录音状态，避免在停止过程中继续处理数据
+    if (!isRecording) {
+        qDebug() << "录音已停止，不再处理音频数据";
+        return;
+    }
+
     if (!wsClient || !wsClient->isConnected()) {
         qDebug() << "WebSocket未连接，无法发送音频数据";
         return;
@@ -141,17 +204,20 @@ void MainWindow::onPCMDataReady(const QByteArray& pcmData)
 void MainWindow::onAudioReceived(const std::vector<uint8_t>& data)
 {
     QByteArray opusData(reinterpret_cast<const char*>(data.data()), data.size());
-    
+
+    // qDebug() << "收到音频数据，大小:" << data.size() << "字节";
+    // qDebug() << "转换后的Opus数据大小:" << opusData.size() << "字节";
+
     // 保存opus数据到文件，包含帧长度信息
-    QFile file("recv.opus");
-    if (file.open(QIODevice::Append)) {
-        QDataStream stream(&file);
-        stream.setByteOrder(QDataStream::LittleEndian);
-        // 写入帧长度（2字节）和数据
-        stream << (quint16)opusData.size();
-        stream.writeRawData(opusData.constData(), opusData.size());
-        file.close();
-    }
+    // QFile file("recv.opus");
+    // if (file.open(QIODevice::Append)) {
+    //     QDataStream stream(&file);
+    //     stream.setByteOrder(QDataStream::LittleEndian);
+    //     // 写入帧长度（2字节）和数据
+    //     stream << (quint16)opusData.size();
+    //     stream.writeRawData(opusData.constData(), opusData.size());
+    //     file.close();
+    // }
     
     QByteArray pcmData = opusDecoder->decode(opusData);
     if (!pcmData.isEmpty()) {
@@ -170,8 +236,10 @@ void MainWindow::startRecording()
     // 开始录音
     if (micManager->startRecording()) {
         isRecording = true;
-        ui->recordButton->setText("停止录音");
-        appendLog("开始录音");
+        if (this->isVisible() && ui && ui->recordButton) {
+            ui->recordButton->setText("停止录音");
+            appendLog("开始录音");
+        }
     } else {
         appendLog("启动录音失败");
     }
@@ -183,10 +251,28 @@ void MainWindow::stopRecording()
         return;
     }
     
+    // 防止重入
+    static QMutex mutex;
+    QMutexLocker locker(&mutex);
+    
+    if (!isRecording) {  // 双重检查
+        return;
+    }
+    
+    isRecording = false;  // 先设置标志，防止新的音频数据进入
+    
+    // 停止录音
     micManager->stopRecording();
-    isRecording = false;
-    ui->recordButton->setText("开始录音");
-    appendLog("停止录音");
+    
+    // 更新UI（如果UI组件还存在且窗口可见）
+    if (this->isVisible()) {
+        if (ui && ui->recordButton) {
+            ui->recordButton->setText("开始录音");
+        }
+        appendLog("停止录音");
+    } else {
+        qDebug() << "窗口未显示，跳过UI更新";
+    }
 }
 
 void MainWindow::setupWebSocket()
@@ -273,6 +359,11 @@ void MainWindow::onStartListenClicked()
         appendLog("WebSocket未连接");
         return;
     }
+    
+    qDebug() << "开始监听流程:";
+    qDebug() << "  - WebSocket状态:" << (wsClient->isConnected() ? "已连接" : "未连接");
+    qDebug() << "  - 当前监听状态:" << (isListening ? "正在监听" : "未监听");
+    qDebug() << "  - 当前录音状态:" << (isRecording ? "正在录音" : "未录音");
     
     isListening = true;
     isRecording = true;  // 设置录音状态

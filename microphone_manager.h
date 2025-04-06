@@ -4,6 +4,8 @@
 #include <QObject>
 #include <QAudioSource>
 #include <QMediaDevices>
+#include <QAudioFormat>
+#include <QMutex>
 
 class MicrophoneManager : public QObject {
     Q_OBJECT
@@ -39,13 +41,14 @@ private:
     bool checkDeviceHealth();
 
     QAudioSource* audioSource;
-    QIODevice* audioIO;
+    QIODevice* audioDevice;
     QAudioFormat format;
     
     int sampleRate;
     int channels;
     int frameSize;  // 每帧采样数
     bool recording;
+    QMutex audioMutex;  // 添加互斥锁
 };
 
 #endif // MICROPHONE_MANAGER_H 

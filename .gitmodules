@@ -1,0 +1,3 @@
+[submodule "third/libfvad"]
+	path = third/libfvad
+	url = https://github.com/dpirch/libfvad.git

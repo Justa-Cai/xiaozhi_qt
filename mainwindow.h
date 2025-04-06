@@ -18,6 +18,10 @@
 #include <QTimer>
 #include "ui_mainwindow.h"
 
+// 前向声明
+class VadProcessor;
+class WebSocketClient;
+
 QT_BEGIN_NAMESPACE
 namespace Ui { class MainWindow; }
 QT_END_NAMESPACE
@@ -47,6 +51,7 @@ private slots:
     void onPCMDataReady(const QByteArray& pcmData);
     void startRecording();
     void stopRecording();
+    void handleSilenceDetected();
 
 private:
     void setupAudioModules();
@@ -86,4 +91,11 @@ private:
     QPushButton *startListenButton;
     QPushButton *stopListenButton;
     QTextEdit *logTextEdit;
+
+    // VAD相关变量
+    const int SILENCE_THRESHOLD;
+    const int SILENCE_DURATION_MS;
+    qint64 lastActiveTime;
+    VadProcessor* vadProcessor;
+    int VAD_SILENCE_FRAMES;
 }; 

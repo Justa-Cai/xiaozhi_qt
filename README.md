@@ -119,11 +119,13 @@ sudo make install
 ```
 
 ## 配置
+### 运行程序(MAC地址未激活会提示激活码)
 ![获取激活码](pic/2025-04-06_17-11.png)
 
-登录 [https://xiaozhi.me/console](https://xiaozhi.me/console) 设置激活码
+### 登录 https://xiaozhi.me/console
 ![登录添加设备](pic/2025-04-06_17-12.png)
 
+### 设置激活码
 ![登录设置激活码](pic/2025-04-06_17-12_1.png)
 
 
